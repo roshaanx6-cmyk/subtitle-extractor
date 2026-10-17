@@ -1,0 +1,182 @@
+// app.js — updated to use server-side proxy endpoints
+
+const $ = id => document.getElementById(id);
+
+const STATE = { hasServerKey: false, provider: 'gemini' };
+
+// UI
+const apiKeyInput = $('api-key');
+const providerSelect = $('provider-select');
+const saveKeyBtn = $('save-key');
+const clearKeyBtn = $('clear-key');
+const urlInput = $('url-input');
+const timestampInput = $('timestamp-input');
+const loadBtn = $('load-episode');
+const fileInput = $('file-input');
+const pasteBtn = $('paste-subtitles');
+const resultsCard = $('results');
+const overlay = $('overlay-screen');
+const bigInfo = $('big-info');
+const charactersList = $('characters-list');
+const importanceLabel = $('importance-label');
+const convSummary = $('conversation-summary');
+const convMeta = $('conversation-meta');
+const downloadJsonBtn = $('download-json');
+
+// init: check server for saved key
+(async function init(){
+  try{
+    const r = await fetch('/api/has-key');
+    const j = await r.json();
+    if (j.hasKey) {
+      STATE.hasServerKey = true;
+      providerSelect.value = j.provider || 'gemini';
+      providerSelect.disabled = true;
+      apiKeyInput.placeholder = 'Saved on server';
+    }
+  }catch(e){ console.warn('Could not contact server'); }
+})();
+
+saveKeyBtn.onclick = async () => {
+  const key = apiKeyInput.value.trim();
+  const provider = providerSelect.value;
+  if (!key) return alert('Please paste your Gemini API key');
+  try{
+    const res = await fetch('/api/save-key', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({key,provider})});
+    const j = await res.json();
+    if (j.ok){
+      STATE.hasServerKey = true;
+      providerSelect.disabled = true;
+      apiKeyInput.value = '';
+      apiKeyInput.placeholder = 'Saved on server';
+      alert('API key saved to server (for prototype).');
+    } else alert('Save failed');
+  } catch(e){ console.error(e); alert('Could not save key to server'); }
+}
+clearKeyBtn.onclick = () => {
+  // Clearing server key is manual for prototype — just clear placeholder locally
+  apiKeyInput.value=''; apiKeyInput.placeholder='Paste your Gemini API key here (will be saved to server)';
+}
+
+pasteBtn.onclick = async () => {
+  const pasted = prompt('Paste the full subtitle text (.vtt or .srt):');
+  if (pasted) processSubtitlesText(pasted);
+}
+
+fileInput.onchange = async (ev) => {
+  const file = ev.target.files[0]; if (!file) return;
+  const text = await file.text(); processSubtitlesText(text);
+}
+
+loadBtn.onclick = async () => {
+  const url = urlInput.value.trim();
+  const ts = timestampInput.value.trim();
+  if (!ts) return alert('Please enter a timestamp (one only)');
+  const seconds = parseTimestampToSeconds(ts);
+  if (isNaN(seconds)) return alert('Could not parse timestamp. Use mm:ss, hh:mm:ss or seconds.');
+
+  if (fileInput.files.length > 0) {
+    const text = await fileInput.files[0].text(); return processSubtitlesText(text, seconds);
+  }
+  if (!url) return alert('Please paste a URL or upload/paste subtitle file.');
+
+  try{
+    showLoadingOverlay('Server: finding subtitle files...');
+    const r = await fetch('/api/find-subtitles', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url})});
+    const j = await r.json();
+    hideLoadingOverlay();
+    const subs = j.subtitles || [];
+    if (subs.length){
+      const subUrl = subs[0];
+      showLoadingOverlay('Server: fetching subtitle file...');
+      const r2 = await fetch('/api/fetch-text', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url: subUrl})});
+      const j2 = await r2.json();
+      hideLoadingOverlay();
+      return processSubtitlesText(j2.text, seconds);
+    } else {
+      const ok = confirm('No subtitle file detected by the server on that page. Would you like to paste subtitle text manually?');
+      if (ok) return pasteBtn.onclick();
+    }
+  } catch(e){ hideLoadingOverlay(); console.error(e); alert('Server fetch failed. You can upload or paste the subtitle file.'); }
+}
+
+function parseTimestampToSeconds(ts) {
+  if (/^\d+$/.test(ts)) return parseInt(ts,10);
+  const parts = ts.split(':').map(p=>p.trim()).filter(Boolean).map(Number);
+  if (parts.some(isNaN)) return NaN;
+  if (parts.length===2) return parts[0]*60+parts[1];
+  if (parts.length===3) return parts[0]*3600+parts[1]*60+parts[2];
+  return NaN;
+}
+
+function showLoadingOverlay(message){ resultsCard.classList.remove('hidden'); overlay.classList.remove('hidden'); bigInfo.textContent=message; }
+function hideLoadingOverlay(){ overlay.classList.add('hidden'); }
+
+// parsing functions copied (vtt/srt)
+function parseVTT(text){
+  const cues=[]; const lines = text.replace(/\r/g,'').split('\n'); let i=0;
+  while(i<lines.length){ let line = lines[i].trim(); if (!line){ i++; continue; }
+    let id=null; if (!line.match(/-->|^WEBVTT/)){ id=line; i++; line=lines[i].trim(); }
+    if (!line.includes('-->')){ i++; continue; }
+    const times = line.split('-->').map(s=>s.trim()); const start = parseVttTime(times[0]); const end = parseVttTime(times[1]); i++; const textLines=[]; while(i<lines.length && lines[i].trim()!==''){ textLines.push(lines[i]); i++; }
+    cues.push({id,start,end,text:textLines.join('\n')}); }
+  return cues;
+}
+function parseSRT(text){ const cues=[]; const blocks = text.replace(/\r/g,'').split('\n\n'); for(const b of blocks){ const lines = b.trim().split('\n').filter(Boolean); if (lines.length<2) continue; let idx = 0; if (/^\d+$/.test(lines[0].trim())) idx=1; const timeLine = lines[idx]; if (!timeLine.includes('-->')) continue; const [startt,endt] = timeLine.split('-->').map(s=>s.trim()); const start = parseVttTime(startt); const end = parseVttTime(endt); const textLines = lines.slice(idx+1); cues.push({start,end,text:textLines.join('\n')}); } return cues; }
+function parseVttTime(t){ const parts = t.split(':').map(x=>x.trim()); if (parts.length===3){ const h=Number(parts[0]); const m=Number(parts[1]); const s=parseFloat(parts[2].replace(',', '.')); return h*3600+m*60+s; } if (parts.length===2){ const m=Number(parts[0]); const s=parseFloat(parts[1].replace(',', '.')); return m*60+s; } return parseFloat(t); }
+
+async function processSubtitlesText(text, timestampSeconds = null){
+  let cues=[];
+  if (/^WEBVTT/m.test(text)) cues = parseVTT(text);
+  else if (/-->/.test(text)) cues = parseVTT(text);
+  else cues = parseSRT(text);
+  if (!cues.length) return alert('No cues parsed from subtitle text');
+  resultsCard.classList.remove('hidden');
+  if (timestampSeconds==null){ const ts = prompt('Enter the timestamp (mm:ss or seconds) — only one'); timestampSeconds = parseTimestampToSeconds(ts); if (isNaN(timestampSeconds)) return alert('Could not parse timestamp'); }
+
+  let idx = cues.findIndex(c => c.start <= timestampSeconds && c.end >= timestampSeconds);
+  if (idx===-1){ idx = cues.findIndex(c => c.end >= timestampSeconds); if (idx===-1) idx = cues.length-1; }
+  const windowSeconds = 30; let startIdx = idx; const names = new Set();
+  function detectSpeaker(text){ const vmatch = text.match(/<v(\s+([^>]+))?>\s*([^<]+)/i); if (vmatch) return vmatch[2] ? vmatch[2].trim() : vmatch[3].trim(); const colon = text.match(/^\s*([A-Z][a-zA-Z0-9_\- ]{1,30}):\s*/m); if (colon) return colon[1].trim(); const dash = text.match(/^\s*-\s*([A-Z][A-Za-z0-9_\- ]+):/); if (dash) return dash[1].trim(); return null; }
+
+  let cutoffTime = cues[idx].start - windowSeconds;
+  for(let i=idx;i>=0;i--){ if (cues[i].start < cutoffTime) { startIdx = i+1; break; } const s = detectSpeaker(cues[i].text); if (s) names.add(s); startIdx = i; }
+  if (!names.size){ startIdx = Math.max(0, idx-9); for(let i=startIdx;i<=idx;i++){ const w = cues[i].text.split('\n').map(l=>l.trim()).filter(Boolean); for(const line of w){ const colon = line.match(/^([A-Z][A-Za-z0-9_\- ]{1,30}):\s*/); if (colon) names.add(colon[1]); } } }
+
+  const convoCues = cues.slice(startIdx, idx+1); const convoText = convoCues.map(c=>c.text).join('\n');
+  let lastSpeaker = null; for(let i=convoCues.length-1;i>=0;i--){ const s = detectSpeaker(convoCues[i].text); if (s){ lastSpeaker = s; break; } }
+
+  charactersList.innerHTML=''; const namesArr=[...names]; if (namesArr.length===0) namesArr.push('Unknown'); namesArr.forEach(n=>{ const d=document.createElement('div'); d.className='char-pill'; d.textContent=n; charactersList.appendChild(d); });
+
+  const importanceScore = computeImportance(convoText); const importanceLabelText = mapImportanceScoreToLabel(importanceScore); importanceLabel.textContent = importanceLabelText;
+
+  overlay.classList.remove('hidden'); bigInfo.innerHTML = `Loading...`; resultsCard.scrollIntoView({behavior:'smooth'});
+  await sleep(3000);
+  bigInfo.innerHTML = `Characters: ${namesArr.join(', ')}`;
+  await sleep(900);
+
+  let summaryRes = null;
+  try{
+    // call server summarize if server key available
+    const r = await fetch('/api/has-key'); const j = await r.json();
+    if (j.hasKey){
+      const r2 = await fetch('/api/summarize', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({convoText, lastSpeaker})});
+      if (r2.ok){ summaryRes = await r2.json(); }
+    }
+  } catch(e){ console.warn('Server LLM call failed', e); }
+  if (!summaryRes) summaryRes = localSummarize(convoText, lastSpeaker);
+
+  convMeta.innerHTML = `<strong>Starting point:</strong> ${formatTime(cues[startIdx].start)} — <strong>Ending (timestamp):</strong> ${formatTime(timestampSeconds)}<br><strong>Who was speaking before timestamp:</strong> ${lastSpeaker||'Unknown'}`;
+  convSummary.innerHTML = `<p><strong>Summary:</strong> ${escapeHtml(summaryRes.summary)}</p><p><strong>What they were talking about (short):</strong> ${escapeHtml(summaryRes.topic)}</p>`;
+  hideLoadingOverlay();
+
+  const out = { characters: namesArr, importance: importanceLabelText, start: cues[startIdx].start, timestamp: timestampSeconds, summary: summaryRes };
+  downloadJsonBtn.onclick = ()=>{ const blob = new Blob([JSON.stringify(out,null,2)],{type:'application/json'}); const url = URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download='conversation.json'; a.click(); URL.revokeObjectURL(url); }
+}
+
+function computeImportance(text){ const strong = ['kill','death','confess','love','marry','die','secret','reveal','attack','suicide','betray']; const txt = text.toLowerCase(); let score=0; const words = txt.split(/[^a-zA-Z]+/).filter(Boolean); score += Math.min(10, Math.floor(words.length/20)); for(const w of strong) if (txt.includes(w)) score+=3; const caps = (text.match(/\b[A-Z][a-z]{1,}\b/g)||[]); score += Math.min(8, new Set(caps).size); return score; }
+function mapImportanceScoreToLabel(s){ if (s<=2) return 'LOW'; if (s<=5) return 'NORMAL'; if (s<=10) return 'HIGH'; return 'INSANELY HIGH'; }
+function formatTime(sec){ const s=Math.floor(sec%60).toString().padStart(2,'0'); const m=Math.floor((sec/60)%60).toString().padStart(2,'0'); const h=Math.floor(sec/3600).toString(); if (h==='0') return `${m}:${s}`; return `${h}:${m}:${s}`; }
+function escapeHtml(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function sleep(ms){ return new Promise(r=>setTimeout(r,ms)); }
+function localSummarize(text,lastSpeaker){ const clean = text.replace(/<[^>]+>/g,'').replace(/\n/g,'. '); const sentences = clean.split(/(?<=[\.\!\?])\s+/).filter(Boolean); const freq={}; const words = clean.toLowerCase().split(/[^a-z]+/).filter(Boolean); for(const w of words){ if (w.length<3) continue; freq[w]=(freq[w]||0)+1; } const sentScore = sentences.map(s=>({s,score: s.toLowerCase().split(/[^a-z]+/).reduce((a,w)=>a+(freq[w]||0),0)})); sentScore.sort((a,b)=>b.score-a.score); const top = sentScore.slice(0,3).map(x=>x.s).join(' '); const topicWords = Object.entries(freq).sort((a,b)=>b[1]-a[1]).slice(0,5).map(x=>x[0]); return {summary: top || sentences.slice(0,2).join(' '), topic: topicWords.join(', '), speakerBefore: lastSpeaker}; }

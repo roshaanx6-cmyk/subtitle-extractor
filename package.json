@@ -1,0 +1,15 @@
+{
+  "name": "subtitle-extractor-server",
+  "version": "1.0.0",
+  "description": "Server to proxy subtitle fetches and Gemini summarization",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "author": "roshaanx6-cmyk",
+  "license": "MIT",
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.18.2"
+  }
+}
