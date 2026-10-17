@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Subtitle Extractor — Conversation Finder</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="container">
+    <h1>Subtitle Extractor — Conversation Finder</h1>
+
+    <div id="api-setup" class="card">
+      <h2>Step 1 — API Key (Gemini)</h2>
+      <p>This app will ask once for your Gemini API key and remember it locally. You can also use the local summarizer if you don't provide a key.</p>
+      <div class="row">
+        <select id="provider-select">
+          <option value="gemini">Gemini (Google Generative)</option>
+          <option value="local">Local (no API)</option>
+        </select>
+        <input id="api-key" type="password" placeholder="Paste your Gemini API key here" />
+        <button id="save-key">Save key</button>
+        <button id="clear-key" class="ghost">Clear key</button>
+      </div>
+      <p class="note">Note: If Gemini network calls fail due to CORS or endpoint differences, the app will fallback to the local summarizer.</p>
+    </div>
+
+    <div id="controls" class="card">
+      <h2>Step 2 — Provide episode link or subtitle file</h2>
+      <input id="url-input" type="url" placeholder="Paste video/page URL (example watch page)" />
+      <div class="row">
+        <input id="timestamp-input" type="text" placeholder="Enter timestamp (mm:ss or seconds) — only one" />
+        <button id="load-episode">Load episode</button>
+      </div>
+      <div class="row">
+        <label class="file-label">Or upload a .vtt/.srt file
+          <input id="file-input" type="file" accept=".vtt,.srt,text/plain" />
+        </label>
+      </div>
+      <p class="help">If fetching the page is blocked by CORS, upload or paste subtitle content (see button below).</p>
+      <button id="paste-subtitles" class="ghost">Paste subtitle text</button>
+    </div>
+
+    <div id="results" class="card hidden">
+      <h2>Results</h2>
+      <div id="overlay-screen" class="overlay hidden">
+        <div class="overlay-content">
+          <div id="loading-spinner">Loading...</div>
+          <div id="big-info" class="big-info"></div>
+        </div>
+      </div>
+
+      <div id="detected-characters" class="section">
+        <h3>Detected characters</h3>
+        <div id="characters-list"></div>
+      </div>
+
+      <div id="importance" class="section">
+        <h3>CONVERSATION IMPORTANCE</h3>
+        <div id="importance-label"></div>
+      </div>
+
+      <div id="conversation" class="section">
+        <h3>Conversation (summarised — only before the timestamp)</h3>
+        <div id="conversation-meta"></div>
+        <div id="conversation-summary"></div>
+      </div>
+
+      <div class="section">
+        <button id="download-json">Download JSON</button>
+      </div>
+    </div>
+
+    <footer>
+      Prototype — stores API key in localStorage. If you want changes, open an issue in the repo.
+    </footer>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
